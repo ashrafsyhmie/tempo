@@ -1,13 +1,13 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { createClient } from "@/lib/supabase/client"
 
 export default function RegisterPage() {
   const [formData, setFormData] = useState({
@@ -17,7 +17,9 @@ export default function RegisterPage() {
     confirmPassword: "",
   })
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
   const router = useRouter()
+  const supabase = createClient()
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -26,24 +28,56 @@ export default function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
+    setError("")
 
     if (formData.password !== formData.confirmPassword) {
-      alert("Passwords do not match")
+      setError("Passwords do not match")
+      return
+    }
+
+    if (formData.password.length < 6) {
+      setError("Password must be at least 6 characters")
       return
     }
 
     setLoading(true)
     try {
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          id: "user-" + Date.now(),
-          email: formData.email,
-          name: formData.name,
-          role: "user",
-        }),
-      )
-      router.push("/dashboard")
+      // Sign up with Supabase
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.name,
+          },
+        },
+      })
+
+      if (signUpError) {
+        setError(signUpError.message)
+        return
+      }
+
+      if (data.user) {
+        // Create user profile in database
+        const { error: dbError } = await supabase.from("users").insert([
+          {
+            id: data.user.id,
+            email: formData.email,
+            full_name: formData.name,
+            role: "user",
+          },
+        ])
+
+        if (dbError) {
+          setError(dbError.message)
+          return
+        }
+
+        router.push("/dashboard")
+      }
+    } catch (err) {
+      setError("An error occurred. Please try again.")
     } finally {
       setLoading(false)
     }
@@ -67,6 +101,11 @@ export default function RegisterPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleRegister} className="space-y-4">
+              {error && (
+                <div className="bg-destructive/10 border border-destructive/50 rounded px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">Full Name</label>
                 <Input

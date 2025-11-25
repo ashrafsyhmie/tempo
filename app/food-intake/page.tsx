@@ -7,65 +7,119 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import DashboardHeader from "@/components/dashboard/dashboard-header"
 import NavigationSidebar from "@/components/navigation-sidebar"
+import { createClient } from "@/lib/supabase/client"
 
 interface FoodItem {
   id: string
-  name: string
+  food_name: string
   calories: number
   protein: number
   carbs: number
-  fat: number
-  time: string
+  fats: number
+  logged_at: string
 }
 
 export default function FoodIntakePage() {
   const [user, setUser] = useState<any>(null)
-  const [foods, setFoods] = useState<FoodItem[]>([
-    { id: "1", name: "Oatmeal with Berries", calories: 350, protein: 12, carbs: 58, fat: 8, time: "7:00 AM" },
-    { id: "2", name: "Grilled Chicken Breast", calories: 280, protein: 40, carbs: 0, fat: 12, time: "12:30 PM" },
-    { id: "3", name: "Salmon with Rice", calories: 520, protein: 35, carbs: 45, fat: 18, time: "7:00 PM" },
-  ])
+  const [foods, setFoods] = useState<FoodItem[]>([])
   const [newFood, setNewFood] = useState("")
   const [newCalories, setNewCalories] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
   const router = useRouter()
+  const supabase = createClient()
 
   useEffect(() => {
-    const userData = localStorage.getItem("user")
-    if (!userData) {
-      router.push("/login")
-      return
-    }
-    setUser(JSON.parse(userData))
-  }, [router])
+    const loadData = async () => {
+      const {
+        data: { user: authUser },
+        error,
+      } = await supabase.auth.getUser()
 
-  const addFood = () => {
-    if (newFood && newCalories) {
-      const food: FoodItem = {
-        id: Date.now().toString(),
-        name: newFood,
-        calories: Number.parseInt(newCalories),
-        protein: Math.round((Number.parseInt(newCalories) * 0.3) / 4),
-        carbs: Math.round((Number.parseInt(newCalories) * 0.45) / 4),
-        fat: Math.round((Number.parseInt(newCalories) * 0.25) / 9),
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      if (error || !authUser) {
+        router.push("/login")
+        return
       }
-      setFoods([...foods, food])
-      setNewFood("")
-      setNewCalories("")
+
+      const { data: userData } = await supabase.from("users").select("*").eq("id", authUser.id).single()
+
+      if (userData) {
+        setUser(userData)
+      }
+
+      // Fetch today's food logs
+      const today = new Date().toISOString().split("T")[0]
+      const { data: foodLogs } = await supabase
+        .from("food_logs")
+        .select("*")
+        .eq("user_id", authUser.id)
+        .gte("logged_at", `${today}T00:00:00`)
+        .lte("logged_at", `${today}T23:59:59`)
+        .order("logged_at", { ascending: false })
+
+      if (foodLogs) {
+        setFoods(foodLogs)
+      }
+      setLoading(false)
+    }
+
+    loadData()
+  }, [router, supabase])
+
+  const addFood = async () => {
+    if (!newFood || !newCalories) return
+
+    setSubmitting(true)
+    try {
+      const { error } = await supabase.from("food_logs").insert([
+        {
+          user_id: user.id,
+          food_name: newFood,
+          calories: Number.parseInt(newCalories),
+          protein: Math.round((Number.parseInt(newCalories) * 0.3) / 4),
+          carbs: Math.round((Number.parseInt(newCalories) * 0.45) / 4),
+          fats: Math.round((Number.parseInt(newCalories) * 0.25) / 9),
+          logged_at: new Date().toISOString(),
+        },
+      ])
+
+      if (!error) {
+        setNewFood("")
+        setNewCalories("")
+        // Refresh food logs
+        const today = new Date().toISOString().split("T")[0]
+        const { data: updatedLogs } = await supabase
+          .from("food_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .gte("logged_at", `${today}T00:00:00`)
+          .lte("logged_at", `${today}T23:59:59`)
+          .order("logged_at", { ascending: false })
+
+        if (updatedLogs) {
+          setFoods(updatedLogs)
+        }
+      }
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const deleteFood = (id: string) => {
-    setFoods(foods.filter((f) => f.id !== id))
+  const deleteFood = async (id: string) => {
+    const { error } = await supabase.from("food_logs").delete().eq("id", id)
+
+    if (!error) {
+      setFoods(foods.filter((f) => f.id !== id))
+    }
   }
 
-  if (!user) return null
+  if (loading || !user) return null
 
   const totalCalories = foods.reduce((sum, f) => sum + f.calories, 0)
   const totalProtein = foods.reduce((sum, f) => sum + f.protein, 0)
   const totalCarbs = foods.reduce((sum, f) => sum + f.carbs, 0)
-  const totalFat = foods.reduce((sum, f) => sum + f.fat, 0)
-  const calorieGoal = 2500
+  const totalFat = foods.reduce((sum, f) => sum + f.fats, 0)
+  const calorieGoal = user.daily_calorie_target || 2500
 
   return (
     <div className="flex h-screen bg-background">
@@ -132,7 +186,7 @@ export default function FoodIntakePage() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">Remaining</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-blue-500">{calorieGoal - totalCalories}</div>
+                <div className="text-2xl font-bold text-blue-500">{Math.max(0, calorieGoal - totalCalories)}</div>
                 <p className="text-xs text-muted-foreground mt-1">kcal left today</p>
               </CardContent>
             </Card>
@@ -149,6 +203,7 @@ export default function FoodIntakePage() {
                   placeholder="Food name (e.g., Chicken Breast)"
                   value={newFood}
                   onChange={(e) => setNewFood(e.target.value)}
+                  disabled={submitting}
                   className="bg-input border-border"
                 />
                 <Input
@@ -156,10 +211,11 @@ export default function FoodIntakePage() {
                   type="number"
                   value={newCalories}
                   onChange={(e) => setNewCalories(e.target.value)}
+                  disabled={submitting}
                   className="bg-input border-border w-24"
                 />
-                <Button onClick={addFood} className="bg-primary hover:bg-primary/90 text-white">
-                  Add
+                <Button onClick={addFood} className="bg-primary hover:bg-primary/90 text-white" disabled={submitting}>
+                  {submitting ? "Adding..." : "Add"}
                 </Button>
               </div>
             </CardContent>
@@ -181,21 +237,24 @@ export default function FoodIntakePage() {
                       className="flex items-center justify-between p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
                     >
                       <div className="flex-1">
-                        <p className="font-medium text-foreground">{food.name}</p>
+                        <p className="font-medium text-foreground">{food.food_name}</p>
                         <div className="flex gap-6 mt-2 text-sm text-muted-foreground">
                           <span>P: {food.protein}g</span>
                           <span>C: {food.carbs}g</span>
-                          <span>F: {food.fat}g</span>
+                          <span>F: {food.fats}g</span>
                         </div>
                       </div>
                       <div className="text-right mr-4">
                         <p className="font-bold text-foreground text-lg">{food.calories}</p>
-                        <p className="text-xs text-muted-foreground">{food.time}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(food.logged_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </p>
                       </div>
                       <Button
                         onClick={() => deleteFood(food.id)}
                         variant="ghost"
                         className="text-destructive hover:bg-destructive/10"
+                        disabled={submitting}
                       >
                         ✕
                       </Button>

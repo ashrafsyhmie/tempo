@@ -8,21 +8,41 @@ import DashboardHeader from "@/components/dashboard/dashboard-header"
 import DashboardStats from "@/components/dashboard/dashboard-stats"
 import RecentActivities from "@/components/dashboard/recent-activities"
 import NavigationSidebar from "@/components/navigation-sidebar"
+import { createClient } from "@/lib/supabase/client"
 
 export default function DashboardPage() {
   const [user, setUser] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const supabase = createClient()
 
   useEffect(() => {
-    const userData = localStorage.getItem("user")
-    if (!userData) {
-      router.push("/login")
-      return
-    }
-    setUser(JSON.parse(userData))
-  }, [router])
+    const getUser = async () => {
+      const {
+        data: { user: authUser },
+        error,
+      } = await supabase.auth.getUser()
 
-  if (!user) return null
+      if (error || !authUser) {
+        router.push("/login")
+        return
+      }
+
+      const { data: userData } = await supabase.from("users").select("*").eq("id", authUser.id).single()
+
+      if (userData) {
+        setUser({
+          ...authUser,
+          ...userData,
+        })
+      }
+      setLoading(false)
+    }
+
+    getUser()
+  }, [router, supabase])
+
+  if (loading || !user) return null
 
   return (
     <div className="flex h-screen bg-background">
@@ -34,7 +54,7 @@ export default function DashboardPage() {
         <div className="p-6 space-y-6 max-w-7xl mx-auto">
           {/* Welcome Section */}
           <div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Welcome back, {user.name}!</h2>
+            <h2 className="text-3xl font-bold text-foreground mb-2">Welcome back, {user.full_name}!</h2>
             <p className="text-muted-foreground">Here's your fitness overview for today</p>
           </div>
 
